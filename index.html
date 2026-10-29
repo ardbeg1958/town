@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0d1a24">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="まちづくり観察">
+<meta name="application-name" content="まちづくり観察">
+<meta name="description" content="ヨーロッパのどこかで町が生まれ、育っていく様子を眺める鑑賞用アプリ。">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>まちづくり観察</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0d1a24;overscroll-behavior:none;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;position:fixed;inset:0;font-family:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;color:#f3ead6}
+canvas#c{position:fixed;left:0;top:0;width:100%;height:100%;display:block}
+#hud{position:fixed;left:calc(env(safe-area-inset-left,0px) + 10px);top:calc(env(safe-area-inset-top,0px) + 10px);background:rgba(20,16,10,.72);border:1px solid rgba(230,200,140,.35);border-radius:10px;padding:10px 12px;min-width:200px;z-index:4;box-shadow:0 4px 16px rgba(0,0,0,.4);font-size:12px}
+#tname{font-family:Georgia,"Times New Roman",serif;font-size:19px;letter-spacing:.04em;color:#ffe7b0}
+#tsub{opacity:.8;font-size:11px;margin-top:1px}
+#pop{font-size:30px;font-weight:700;color:#fff;line-height:1.1;margin-top:6px;font-variant-numeric:tabular-nums}
+#pop small{font-size:12px;font-weight:400;opacity:.75;margin-left:4px}
+#stats{display:grid;grid-template-columns:auto auto;gap:1px 12px;margin-top:5px;font-variant-numeric:tabular-nums}
+#stats span:nth-child(odd){opacity:.7}#stats span:nth-child(even){text-align:right}
+#spark{display:block;margin-top:6px;width:200px;height:34px}
+#ui{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);display:flex;flex-wrap:wrap;justify-content:center;gap:6px;transition:opacity .7s;z-index:5;padding:0 8px}
+#ui.hide{opacity:0;pointer-events:none}
+#ui button{font:inherit;font-size:13px;color:#f3ead6;background:rgba(30,24,16,.78);border:1px solid rgba(230,200,140,.4);border-radius:18px;padding:7px 12px}
+#ui button.on{background:#c98b3a;color:#1b1209;border-color:#f0c070;font-weight:700}
+#fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:6;display:flex;align-items:center;justify-content:center;flex-direction:column;transition:none}
+#fade div{font-family:Georgia,serif;font-size:28px;color:#ffe7b0}#fade p{margin:6px 0 0;font-size:14px;opacity:.8}
+@media (max-width:520px){#hud{min-width:0;padding:8px 10px;font-size:11px}#tname{font-size:16px}#pop{font-size:24px}#spark{width:160px;height:28px}#ui button{font-size:12px;padding:6px 10px}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+ <div id="tname">—</div><div id="tsub">—</div>
+ <div id="pop">0<small>人</small></div>
+ <div id="stats"></div>
+ <canvas id="spark" width="400" height="68"></canvas>
+</div>
+<div id="ui">
+ <button data-era="1700">1700年代</button><button data-era="1800">1800年代</button><button data-era="1900">1900年代</button><button data-era="2000">2000年代</button>
+ <button id="spd">速度 1×</button><button id="snd">音 オフ</button><button id="nxt">次の町へ</button>
+</div>
+<div id="fade"><div id="fname"></div><p id="fsub"></p></div>
+<script>
+"use strict";
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const N=44;
+let W=0,H=0,DPR=1,TW=20,TH=10,ZH=5,ox=0,oy=0;
+const LS='town_settings_v1';
+let S={era:1800,speed:1,sound:false};
+try{Object.assign(S,JSON.parse(localStorage.getItem(LS)||'{}'))}catch(e){}
+function save(){try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}}
+const rnd=Math.random,ri=n=>Math.floor(rnd()*n),pick=a=>a[ri(a.length)];
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+// ---------- state ----------
+let T,E,F,R,RL,B,P,GV,buildings,cars,peds,trains,smoke,history,step,town,cache,cacheDirty,railPath,railProg,hwyPath,hwyProg,plantTile,ending,fadeA,titleT,lastHist;
+const ERA={
+1700:{name:'1700年代',maxL:2,steps:900,rail:false,power:false,cars:false,road:'#a68a5e',roof:['#9c4a2e','#7d3b24','#8a5a34'],wall:['#e8dcc0','#d9c8a2','#efe4cc']},
+1800:{name:'1800年代',maxL:3,steps:1000,rail:true,power:false,cars:false,road:'#8d8780',roof:['#8a3c2a','#5f6670','#6d4a3a'],wall:['#e2d4b8','#cbbba0','#d8c7a8','#bfae94']},
+1900:{name:'1900年代',maxL:4,steps:1050,rail:true,power:true,cars:true,road:'#6e6a66',roof:['#7a3a2c','#57606a','#4e5560'],wall:['#d8c7a8','#c4b49c','#b9a48a','#cfc2ae']},
+2000:{name:'2000年代',maxL:6,steps:1100,rail:true,power:true,cars:true,road:'#4c4c52',roof:['#7a3a2c','#56606c','#3e4550'],wall:['#e6e0d6','#d2ccc2','#c9d2da','#bcc4ca']}};
+const idx=(x,y)=>y*N+x, inb=(x,y)=>x>=0&&y>=0&&x<N&&y<N;
+const D4=[[1,0],[-1,0],[0,1],[0,-1]];
+// ---------- names ----------
+const PRE=['Alt','Neu','Kirch','Lin','Bran','Mar','Wester','Hohen','Bel','Mont','Ros','Vall','Fal','Grün','Saint-Lau','San Vi','Brem','Ald','Wil','Eich','Lor','Ber','Tor','Ardes'];
+const SUF=['burg','dorf','heim','ville','bourg','ford','wick','stad','berg','haven','ona','enza','ac','ingen','au','mere','by','lund'];
+const REG=['ライン川のほとり','アルザス地方','トスカーナの丘','ブルターニュの海辺','ボヘミアの森','フランドル平原','バイエルンの谷','ユトランド半島','ロワール川流域','チロルのふもと','コーンウォール','ピカルディ'];
+function townName(){let n=pick(PRE)+pick(SUF);return n.replace(/-(\w)/,(m,c)=>'-'+c.toUpperCase());}
+// ---------- noise ----------
+function makeNoise(g){const a=[];for(let i=0;i<(g+1)*(g+1);i++)a.push(rnd());return (x,y)=>{x*=g;y*=g;const xi=Math.floor(x),yi=Math.floor(y),fx=x-xi,fy=y-yi,s=t=>t*t*(3-2*t);const v=(i,j)=>a[Math.min(j,g)*(g+1)+Math.min(i,g)];const u=s(fx),w=s(fy);return (v(xi,yi)*(1-u)+v(xi+1,yi)*u)*(1-w)+(v(xi,yi+1)*(1-u)+v(xi+1,yi+1)*u)*w;}}
+// ---------- town generation ----------
+function newTown(){
+ const sz=N*N;T=new Uint8Array(sz);E=new Uint8Array(sz);F=new Uint8Array(sz);R=new Uint8Array(sz);RL=new Uint8Array(sz);B=new Int32Array(sz).fill(-1);P=new Uint8Array(sz);GV=new Float32Array(sz);
+ buildings=[];cars=[];peds=[];trains=[];smoke=[];history=[];step=0;railPath=null;railProg=0;hwyPath=null;hwyProg=0;plantTile=null;ending=0;lastHist=0;
+ const n1=makeNoise(4),n2=makeNoise(9),n3=makeNoise(6);
+ const coast=rnd()<.55?ri(4):-1;
+ for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+  let h=n1(x/N,y/N)*.65+n2(x/N,y/N)*.35;
+  if(coast>=0){const d=[x,N-1-x,y,N-1-y][coast]/N;if(d<.22)h-=(.22-d)*2.6;}
+  const i=idx(x,y);GV[i]=n2(y/N,x/N);
+  if(h<.24){T[i]=0;E[i]=0;}else{T[i]=1;E[i]=h<.56?1:h<.68?2:3;}
+  if(T[i]&&E[i]<3&&n3(x/N,y/N)>.58)F[i]=1;
+ }
+ // river
+ const vert=rnd()<.5;let p=8+ri(N-16),dr=0;
+ for(let s=0;s<N;s++){dr+=(rnd()-.5)*.8;dr=clamp(dr,-.9,.9);p=clamp(p+dr,3,N-4);const w=s%7<4?2:1;
+  for(let k=0;k<w;k++){const q=Math.round(p)+k;const x=vert?q:s,y=vert?s:q;if(inb(x,y)){const i=idx(x,y);T[i]=0;E[i]=0;F[i]=0;}}}
+ // center
+ let best=null,bs=-1e9;
+ for(let t=0;t<600;t++){const x=8+ri(N-16),y=8+ri(N-16);let ok=true;for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){const i=idx(x+dx,y+dy);if(!T[i]||E[i]>2)ok=false;}if(!ok)continue;
+  let wn=0;for(let dy=-5;dy<=5;dy++)for(let dx=-5;dx<=5;dx++)if(inb(x+dx,y+dy)&&!T[idx(x+dx,y+dy)])wn++;
+  let land=0;for(let dy=-8;dy<=8;dy+=2)for(let dx=-8;dx<=8;dx+=2)if(inb(x+dx,y+dy)&&T[idx(x+dx,y+dy)]&&E[idx(x+dx,y+dy)]<3)land++;
+  const sc=-Math.hypot(x-N/2,y-N/2)*.6+(wn>0&&wn<30?6:0)+land*.25+rnd();if(sc>bs){bs=sc;best=[x,y];}}
+ if(!best)best=[N>>1,N>>1];
+ const [cx,cy]=best;for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){const i=idx(cx+dx,cy+dy);T[i]=1;F[i]=0;if(E[i]>1)E[i]=1;}
+ for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++)E[idx(cx+dx,cy+dy)]=E[idx(cx,cy)];
+ const reg=pick(REG);town={name:townName(),region:reg,cx,cy,era:S.era,base:S.era,founded:false,maxSteps:ERA[S.era].steps};
+ cacheDirty=true;layout();
+ document.getElementById('fname').textContent=town.name;document.getElementById('fsub').textContent=reg+'・'+ERA[S.era].name;titleT=4.5;
+ updateHud(true);
+}
+function found(){
+ const {cx,cy}=town;town.founded=true;
+ // plaza 2x2
+ for(const [dx,dy] of [[0,0],[1,0],[0,1],[1,1]]){const i=idx(cx+dx,cy+dy);R[i]=3;F[i]=0;}
+ for(const [dx,dy] of [[-1,0],[2,1],[0,-1],[1,2]]){let x=cx+dx,y=cy+dy,ddx=dx<0?-1:dx>1?1:0,ddy=dy<0?-1:dy>1?1:0;for(let k=0;k<3;k++){if(inb(x,y)&&T[idx(x,y)])R[idx(x,y)]=1,F[idx(x,y)]=0;x+=ddx;y+=ddy;}}
+ const ch=[[cx-1,cy-1],[cx+2,cy-1],[cx-1,cy+2],[cx+2,cy+2]].find(([x,y])=>T[idx(x,y)]&&!R[idx(x,y)]);
+ if(ch)addB(ch[0],ch[1],'church',1);
+ if(S.era>=1900){placePlant();}
+ cacheDirty=true;
+}
+function addB(x,y,type,level){const i=idx(x,y);F[i]=0;const b={x,y,type,level:level||1,born:now,seed:rnd(),pal:ri(4),dead:false};b.id=buildings.length;buildings.push(b);B[i]=b.id;return b;}
+function distC(x,y){return Math.hypot(x-town.cx-.5,y-town.cy-.5);}
+function radius(){return Math.min(N/2-1,4+Math.sqrt(buildings.length)*1.25);}
+function adjRoad(x,y){for(const [dx,dy] of D4){const a=x+dx,b=y+dy;if(inb(a,b)&&R[idx(a,b)])return true;}return false;}
+function freeTile(x,y,maxE){if(!inb(x,y))return false;const i=idx(x,y);return T[i]&&!R[i]&&!RL[i]&&B[i]<0&&E[i]<=(maxE||2);}
+function makes2x2(x,y){for(const [a,b] of [[0,0],[-1,0],[0,-1],[-1,-1]]){let c=0;for(const [p,q] of [[0,0],[1,0],[0,1],[1,1]]){const X=x+a+p,Y=y+b+q;if(X===x&&Y===y)continue;if(inb(X,Y)&&R[idx(X,Y)])c++;}if(c===3)return true;}return false;}
+function growRoad(){
+ const Rm=radius()+1.5;
+ RLIST=roadTiles();
+ for(let t=0;t<30;t++){
+  if(!RLIST.length)return false;const i=pick(RLIST);const x=i%N,y=(i/N)|0;if(R[i]===2)continue;if(distC(x,y)>Rm)continue;
+  let dirs=D4.slice();
+  // prefer straight continuation
+  for(const [dx,dy] of D4){if(inb(x-dx,y-dy)&&R[idx(x-dx,y-dy)]&&rnd()<.6){dirs=[[dx,dy]];break;}}
+  const [dx,dy]=pick(dirs);const nx=x+dx,ny=y+dy;if(!inb(nx,ny))continue;const j=idx(nx,ny);
+  if(R[j])continue;
+  if(!T[j]){ // bridge
+   if(rnd()<.25){let k=1,path=[];while(k<5){const X=x+dx*k,Y=y+dy*k;if(!inb(X,Y))break;const q=idx(X,Y);if(T[q]){if(B[q]<0&&E[q]<3)return finishBridge(path,X,Y);break;}path.push(q);k++;}}
+   continue;}
+  if(B[j]>=0||E[j]>2||makes2x2(nx,ny))continue;
+  if(distC(nx,ny)>Rm)continue;
+  R[j]=1;F[j]=0;cacheDirty=true;return true;
+ }
+ return false;
+}
+function finishBridge(path,X,Y){if(path.length>3)return false;for(const q of path)R[q]=1;const q=idx(X,Y);R[q]=1;F[q]=0;cacheDirty=true;return true;}
+function findTile(test,near){const Rm=radius();for(let t=0;t<60;t++){const a=rnd()*Math.PI*2,r=(near?Rm*Math.sqrt(rnd()):Rm*(.6+rnd()*.6));const x=Math.round(town.cx+.5+Math.cos(a)*r),y=Math.round(town.cy+.5+Math.sin(a)*r);if(test(x,y))return [x,y];}return null;}
+function growBuilding(){
+ const t=findTile((x,y)=>freeTile(x,y)&&adjRoad(x,y),true);if(!t)return;
+ const d=distC(t[0],t[1]);const era=S.era;
+ let type='house';const r=rnd();
+ if(d<radius()*.45&&r<.18)type='shop';
+ addB(t[0],t[1],type,1);
+}
+function upgrade(){
+ if(!buildings.length)return;const b=pick(buildings);if(b.dead||(b.type!=='house'&&b.type!=='shop'))return;
+ const e=ERA[S.era];const d=distC(b.x,b.y),Rm=radius();
+ let cap=e.maxL-Math.floor(d/(Math.max(6,Rm)*.3));cap=clamp(cap,1,e.maxL);cap=Math.min(cap,1+Math.floor(step/170));
+ if(S.era===2000&&b.type==='house'&&d<4&&step>600)cap=6;
+ if(b.level<cap){b.level++;b.born=now;}
+}
+function specials(){
+ const e=S.era,nb=buildings.length,cnt=t=>buildings.filter(b=>b.type===t&&!b.dead).length;
+ if(e===1700){
+  if(nb>8&&cnt('windmill')<Math.min(4,1+nb/35)){const t=findTile((x,y)=>freeTile(x,y,3)&&E[idx(x,y)]>=1&&distC(x,y)>3);if(t)addB(t[0],t[1],'windmill');}
+  if(nb>14&&cnt('watermill')<2){const t=findTile((x,y)=>freeTile(x,y)&&D4.some(([a,b])=>inb(x+a,y+b)&&!T[idx(x+a,y+b)]));if(t)addB(t[0],t[1],'watermill');}
+  if(nb>40&&cnt('inn')<2&&rnd()<.05){const t=findTile((x,y)=>freeTile(x,y)&&adjRoad(x,y),true);if(t)addB(t[0],t[1],'inn');}
+ }
+ if(e>=1800&&e<2000){if(nb>25&&cnt('factory')<Math.floor(nb/45)+1){const t=findTile((x,y)=>freeTile(x,y)&&adjRoad(x,y)&&distC(x,y)>radius()*.5);if(t)addB(t[0],t[1],'factory');}}
+ if(e===1800&&nb>20&&cnt('windmill')<1){const t=findTile((x,y)=>freeTile(x,y,3)&&distC(x,y)>3);if(t)addB(t[0],t[1],'windmill');}
+ if(e===2000){
+  if(nb>30&&cnt('turbine')<Math.min(7,Math.floor(nb/35))){const t=findTile((x,y)=>{if(!inb(x,y))return false;const i=idx(x,y);return T[i]&&!R[i]&&!RL[i]&&B[i]<0&&E[i]>=2;})||findTile((x,y)=>freeTile(x,y)&&distC(x,y)>radius()*.8);if(t)addB(t[0],t[1],'turbine');}
+  if(nb>40&&cnt('factory')<Math.floor(nb/80)+1){const t=findTile((x,y)=>freeTile(x,y)&&adjRoad(x,y)&&distC(x,y)>radius()*.6);if(t)addB(t[0],t[1],'factory');}
+  if(nb>60&&!hwyPath)planHighway();
+ }
+ if(ERA[e].rail&&!railPath&&nb>(e===1800?35:20))planRail();
+ if(ERA[e].power&&!plantTile&&nb>6)placePlant();
+ if(railPath&&railProg>=railPath.length&&!buildings.some(b=>b.type==='station')){const m=railPath[railPath.length>>1];for(const [dx,dy] of [[0,-1],[0,1],[-1,0],[1,0],[0,-2],[0,2]]){const x=m[0]+dx*(railVert?1:0)+(railVert?0:dy?0:0),y=m[1];}
+  // station next to rail nearest center
+  let best=null,bd=1e9;for(const [x,y] of railPath){for(const [a,b] of D4){const X=x+a,Y=y+b;if(freeTile(X,Y)||(inb(X,Y)&&B[idx(X,Y)]>=0&&buildings[B[idx(X,Y)]].type==='house')){const d=distC(X,Y);if(d<bd){bd=d;best=[X,Y];}}}}
+  if(best){const q=idx(best[0],best[1]);if(B[q]>=0)buildings[B[q]].dead=true,B[q]=-1;addB(best[0],best[1],'station');}}
+}
+let railVert=false;
+function planLine(vert,off){const c=vert?town.cx:town.cy;let best=null,bs=1e9;for(let o=-off;o<=off;o++){if(Math.abs(o)<2)continue;const L=c+o;if(L<2||L>N-3)continue;let s=0;for(let k=0;k<N;k++){const x=vert?L:k,y=vert?k:L;const i=idx(x,y);if(B[i]>=0)s+=buildings[B[i]].type==='church'?99:3;if(!T[i])s+=1.2;if(E[i]>=3)s+=4;if(RL[i]||R[i]===2)s+=50;}if(s<bs){bs=s;best=L;}}
+ const path=[];for(let k=0;k<N;k++)path.push(vert?[best,k]:[k,best]);return path;}
+function planRail(){railVert=rnd()<.5;railPath=planLine(railVert,7);railProg=0;}
+function planHighway(){hwyPath=planLine(!railVert,11);hwyProg=0;}
+function clearTile(i){if(B[i]>=0){buildings[B[i]].dead=true;B[i]=-1;}F[i]=0;}
+function placePlant(){
+ const t=findTile((x,y)=>freeTile(x,y)&&adjRoad(x,y)&&distC(x,y)>2.5)||findTile((x,y)=>freeTile(x,y)&&adjRoad(x,y),true);if(!t)return;
+ addB(t[0],t[1],'plant');plantTile=t;
+ for(const [a,b] of D4){const X=t[0]+a,Y=t[1]+b;if(inb(X,Y)&&R[idx(X,Y)])P[idx(X,Y)]=1;}
+}
+function spreadPower(){
+ if(!plantTile)return;const add=[];
+ for(let i=0;i<N*N;i++)if(P[i]){const x=i%N,y=(i/N)|0;for(const [a,b] of D4){const X=x+a,Y=y+b;if(inb(X,Y)){const j=idx(X,Y);if(R[j]&&!P[j]&&rnd()<.22)add.push(j);}}}
+ for(const j of add){P[j]=1;}
+}
+function powered(b){if(b.type==='plant'||b.type==='turbine')return true;for(const [a,c] of D4){const X=b.x+a,Y=b.y+c;if(inb(X,Y)&&P[idx(X,Y)])return true;}return false;}
+// ---------- simulation step ----------
+function simStep(){
+ step++;
+ if(!town.founded){if(step>8)found();return;}
+ const e=ERA[S.era];
+ const roadNeed=buildings.length*0.9+20>countRoads();
+ for(let k=0;k<(roadNeed?2:1);k++)if(rnd()<.75)growRoad();
+ if(rnd()<.6)growBuilding();
+ for(let k=0;k<2;k++)if(rnd()<.45)upgrade();
+ if(step%6===0)specials();
+ if(railPath&&railProg<railPath.length&&step%2===0){const [x,y]=railPath[railProg];const i=idx(x,y);if(R[i]!==3){clearTile(i);RL[i]=1;}railProg++;cacheDirty=true;if(railProg>=railPath.length)spawnTrain();}
+ if(hwyPath&&hwyProg<hwyPath.length&&step%2===0){const [x,y]=hwyPath[hwyProg];const i=idx(x,y);if(!RL[i]&&R[i]!==3){clearTile(i);R[i]=2;if(P[i]===0&&hwyProg>0){} }hwyProg++;cacheDirty=true;}
+ if(e.power&&step%2===0)spreadPower();
+ if(step%8===0){history.push(population());if(history.length>140)history.shift();}
+ manageAgents();
+ if(step>=town.maxSteps&&!ending)ending=1;
+}
+let roadCountCache=0,RLIST=[];function countRoads(){return roadCountCache;}
+const CAP={house:[6,14,34,80,160,320],shop:[4,10,24,50,90,160]};
+const JOBS={church:6,windmill:4,watermill:6,inn:8,factory:120,station:30,plant:60,turbine:2,shop:[4,10,26,60,140,300],house:[0,0,0,2,6,20]};
+function population(){let p=0;for(const b of buildings)if(!b.dead&&CAP[b.type])p+=CAP[b.type][b.level-1]*(S.era===1700?.9:1);return Math.round(p);}
+function jobs(){let j=0;for(const b of buildings){if(b.dead)continue;const v=JOBS[b.type];j+=Array.isArray(v)?v[b.level-1]:v||0;}return j;}
+// ---------- agents ----------
+function roadTiles(){const a=[];for(let i=0;i<N*N;i++)if(R[i])a.push(i);roadCountCache=a.length;return a;}
+function manageAgents(){
+ const rt=roadTiles();if(!rt.length)return;const pop=population();
+ const wantC=Math.min(60,Math.floor(rt.length/(S.era>=1900?3:6))+(S.era===2000?8:0));
+ const wantP=Math.min(70,Math.floor(pop/30)+4);
+ if(cars.length<wantC&&rnd()<.5){const i=pick(rt);cars.push(newAgent(i,'car'));}
+ if(peds.length<wantP&&rnd()<.6){const i=pick(rt);peds.push(newAgent(i,'ped'));}
+}
+function vehicleKind(){const e=S.era,r=rnd();if(e===1700)return r<.75?'cart':'coach';if(e===1800)return r<.6?'cart':'coach';if(e===1900)return r<.35?'coach':r<.55?'tram':'oldcar';return r<.1?'bus':r<.2?'truck':'car';}
+const CARCOL=['#c0392b','#2e86c1','#f4f1ea','#27ae60','#f1c40f','#34495e','#8e44ad','#d35400','#95a5a6'];
+function newAgent(i,k){const x=i%N,y=(i/N)|0;const a={x,y,px:x,py:y,t:rnd(),k:k==='car'?vehicleKind():'ped',col:pick(CARCOL),sp:0,off:(rnd()-.5)*.5};
+ a.sp=a.k==='ped'?.35+rnd()*.2:a.k==='cart'?.5:a.k==='coach'?.75:a.k==='oldcar'?1.1:a.k==='tram'?.9:1.6+rnd()*.5;a.px=x;a.py=y;nextTile(a);return a;}
+function nextTile(a){const opts=[];for(const [dx,dy] of D4){const X=a.x+dx,Y=a.y+dy;if(inb(X,Y)&&R[idx(X,Y)]&&!(X===a.px&&Y===a.py))opts.push([X,Y]);}
+ let n;if(!opts.length)n=[a.px,a.py];else{const st=opts.find(([X,Y])=>X-a.x===a.x-a.px&&Y-a.y===a.y-a.py);n=(st&&rnd()<.6)?st:pick(opts);}
+ a.px=a.x;a.py=a.y;a.x=n[0];a.y=n[1];}
+function spawnTrain(){trains.push({s:0,dir:1,wait:2,len:S.era===1800?4:5});}
+function updAgents(dt){
+ const sp=S.speed;
+ for(const L of [cars,peds])for(let k=L.length-1;k>=0;k--){const a=L[k];a.t+=dt*a.sp*sp*(a.x===a.px&&a.y===a.py?3:1);if(a.t>=1){a.t-=1;if(!R[idx(a.x,a.y)]){L.splice(k,1);continue;}nextTile(a);}
+  if(!R[idx(a.px,a.py)]&&!R[idx(a.x,a.y)])L.splice(k,1);}
+ for(const tr of trains){if(tr.wait>0){tr.wait-=dt*sp;continue;}tr.s+=tr.dir*dt*sp*(S.era===2000?4:2.6);const Lm=railPath.length+tr.len;if(tr.s>Lm){tr.s=Lm;tr.dir=-1;tr.wait=3;}if(tr.s<-1){tr.s=-1;tr.dir=1;tr.wait=3;}
+  if(S.era<2000&&rnd()<dt*sp*8){const p=railAt(tr.s);if(p)smoke.push({x:p[0],y:p[1],z:1.4,a:1,r:.15,vx:-tr.dir*.2});}}
+ for(const b of buildings){if(b.dead)continue;if((b.type==='factory'&&S.era<2000)||(b.type==='plant'&&S.era===1900)){if(rnd()<dt*sp*2.5*(b.type==='plant'?1.5:1))smoke.push({x:b.x+.1,y:b.y-.1,z:b.type==='plant'?3.4:2.8,a:1,r:.2,vx:.15});}}
+ for(let k=smoke.length-1;k>=0;k--){const s=smoke[k];s.z+=dt*.8;s.x+=s.vx*dt;s.y-=dt*.25;s.r+=dt*.25;s.a-=dt*.28;if(s.a<=0)smoke.splice(k,1);}
+ if(smoke.length>220)smoke.splice(0,smoke.length-220);
+}
+function railAt(s){if(!railPath)return null;const i=clamp(s,0,railPath.length-1.001);const a=Math.floor(i),f=i-a;const p=railPath[a],q=railPath[Math.min(a+1,railPath.length-1)];return [p[0]+(q[0]-p[0])*f,p[1]+(q[1]-p[1])*f];}
+// ---------- layout / projection ----------
+function layout(){
+ DPR=Math.min(2,window.devicePixelRatio||1);W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;
+ const portrait=H>W*1.15;
+ if(portrait)TW=Math.max(16,W*2.3/N);else TW=Math.min(W*1.0/N,H*1.75/N);
+ TH=TW/2;ZH=TW*.28;
+ const mcx=portrait?town.cx+.5:N/2*0.4+(town.cx+.5)*0.6,mcy=portrait?town.cy+.5:N/2*0.4+(town.cy+.5)*0.6;
+ const sx=(mcx-mcy)*TW/2,sy=(mcx+mcy)*TH/2;
+ ox=W/2-sx;oy=(portrait?H*.56:H*.52)-sy;
+ // clamp map in view
+ const mapW=N*TW,top=oy,bot=oy+N*TH;
+ cache=document.createElement('canvas');cache.width=W*DPR;cache.height=H*DPR;cacheDirty=true;
+}
+function iso(x,y,e){return [ox+(x-y)*TW/2,oy+(x+y)*TH/2-e*ZH];}
+function elevAt(x,y){const i=idx(clamp(Math.round(x),0,N-1),clamp(Math.round(y),0,N-1));return T[i]?E[i]:(R[i]?1:0.3);}
+// ---------- colors ----------
+function shade(hex,f){const n=parseInt(hex.slice(1),16);let r=n>>16,g=n>>8&255,b=n&255;if(f<1){r*=f;g*=f;b*=f;}else{r+=(255-r)*(f-1);g+=(255-g)*(f-1);b+=(255-b)*(f-1);}return 'rgb('+(r|0)+','+(g|0)+','+(b|0)+')';}
+function poly(pts,fill){ctx.beginPath();ctx.moveTo(pts[0],pts[1]);for(let i=2;i<pts.length;i+=2)ctx.lineTo(pts[i],pts[i+1]);ctx.closePath();ctx.fillStyle=fill;ctx.fill();}
+// ---------- terrain cache ----------
+function drawCache(){
+ const c=cache.getContext('2d');const save=ctx;ctx_=c;
+ c.setTransform(DPR,0,0,DPR,0,0);c.clearRect(0,0,W,H);
+ const P2=(pts,f)=>{c.beginPath();c.moveTo(pts[0],pts[1]);for(let i=2;i<pts.length;i+=2)c.lineTo(pts[i],pts[i+1]);c.closePath();c.fillStyle=f;c.fill();};
+ const road=ERA[S.era].road;
+ for(let s=0;s<2*N-1;s++)for(let x=0;x<N;x++){const y=s-x;if(y<0||y>=N)continue;const i=idx(x,y);
+  const e=T[i]?E[i]:0;const [sx,sy]=iso(x,y,e);const hw=TW/2+.4,hh=TH/2+.3;
+  let col;
+  if(!T[i])col=GV[i]>.5?'#3d78a8':'#3a72a2';
+  else if(e===3)col=GV[i]>.5?'#8a8a6e':'#7e8064';
+  else{const g=GV[i];col=e===2?(g>.5?'#6f9a4c':'#679047'):(g>.5?'#7fae55':'#78a74f');if(S.era===1700&&g>.62&&e===1&&distC(x,y)>6)col='#a7a85a';}
+  // side faces
+  const eR=inb(x+1,y)?(T[idx(x+1,y)]?E[idx(x+1,y)]:0):0,eB=inb(x,y+1)?(T[idx(x,y+1)]?E[idx(x,y+1)]:0):0;
+  if(e>eB){const d=(e-eB)*ZH;P2([sx-hw,sy,sx,sy+hh,sx,sy+hh+d,sx-hw,sy+d],shade(e===3?'#6a6a52':'#5c7f3c',.85));}
+  if(e>eR){const d=(e-eR)*ZH;P2([sx,sy+hh,sx+hw,sy,sx+hw,sy+d,sx,sy+hh+d],shade(e===3?'#6a6a52':'#5c7f3c',.7));}
+  P2([sx,sy-hh,sx+hw,sy,sx,sy+hh,sx-hw,sy],col);
+  if(!T[i]&&R[i]){ // bridge
+   const [bx,by]=iso(x,y,1);P2([bx,by-hh*.55,bx+hw*.55,by,bx,by+hh*.55,bx-hw*.55,by],S.era===2000?'#9aa0a6':'#a08a6a');
+   c.fillStyle='rgba(0,0,0,.25)';c.fillRect(bx-1,by,2,ZH);}
+  else if(R[i]){
+   const rc=R[i]===3?(S.era===1700?'#c2ad86':'#b8ab98'):R[i]===2?'#3a3a40':road;
+   if(R[i]===3){P2([sx,sy-hh,sx+hw,sy,sx,sy+hh,sx-hw,sy],rc);}
+   else{const k=R[i]===2?.42:.3;
+    P2([sx,sy-hh*k*2,sx+hw*k*2,sy,sx,sy+hh*k*2,sx-hw*k*2,sy],rc);
+    for(const [dx,dy] of D4){const X=x+dx,Y=y+dy;if(!inb(X,Y)||!R[idx(X,Y)])continue;const mx=(dx-dy)*TW/4,my=(dx+dy)*TH/4;
+     // strip from center towards neighbour
+     const px=dy!==0?hw*k:0,py=dy!==0?hh*k:hh*k;const qx=dx!==0?hw*k:hw*k,qy=dx!==0?-hh*k:hh*k;
+     const ax=(dx!==0)?hw*k:hw*k;
+     const v1=[-(dy!==0?1:0)*hw*k*(dx===0?1:0),0];
+     // perpendicular vector (in screen) for x-direction strip is (hw*k, -hh*k)?? use tile axes
+     const pxv=dx!==0?[-hw*k,-hh*k]:[hw*k,-hh*k];
+     P2([sx+pxv[0],sy+pxv[1],sx-pxv[0],sy-pxv[1],sx+mx*2-pxv[0],sy+my*2-pxv[1],sx+mx*2+pxv[0],sy+my*2+pxv[1]],rc);}
+    if(R[i]===2){c.strokeStyle='rgba(255,230,120,.5)';c.lineWidth=.6;c.beginPath();c.moveTo(sx-hw*.9*(railVert?1:0),sy);c.stroke();}
+   }
+  }
+  if(RL[i]){const vert=railVert;const ax=vert?[TW/2*0.5,TH/2*0.5]:[TW/2*0.5,-TH/2*0.5];// along-rail is y-axis(vert) or x-axis
+   const along=vert?[-TW/2,TH/2]:[TW/2,TH/2];const perp=vert?[TW/2,TH/2]:[-TW/2,TH/2];
+   const [rx,ry]=T[i]?[sx,sy]:iso(x,y,1);
+   c.strokeStyle='#5a4632';c.lineWidth=Math.max(1,TW*.08);
+   for(let t=-.5;t<.5;t+=.25){c.beginPath();c.moveTo(rx+along[0]*t-perp[0]*.25,ry+along[1]*t-perp[1]*.25);c.lineTo(rx+along[0]*t+perp[0]*.25,ry+along[1]*t+perp[1]*.25);c.stroke();}
+   c.strokeStyle='#c9c9cf';c.lineWidth=Math.max(.7,TW*.04);for(const o of [-.13,.13]){c.beginPath();c.moveTo(rx-along[0]*.5+perp[0]*o,ry-along[1]*.5+perp[1]*o);c.lineTo(rx+along[0]*.5+perp[0]*o,ry+along[1]*.5+perp[1]*o);c.stroke();}
+  }
+ }
+ cacheDirty=false;
+}
+let ctx_=null;
+// ---------- drawing primitives ----------
+let WIN=[];
+function boxAt(sx,sy,a,b,h,top,left,right){
+ poly([sx-a,sy-h,sx,sy+b-h,sx,sy+b,sx-a,sy],left);
+ poly([sx,sy+b-h,sx+a,sy-h,sx+a,sy,sx,sy+b],right);
+ poly([sx,sy-b-h,sx+a,sy-h,sx,sy+b-h,sx-a,sy-h],top);
+}
+function windows(sx,sy,a,b,h,fl,cols,seed,warm,day){
+ const ww=Math.max(1,TW*.07),wh=Math.max(1.2,TW*.09);
+ for(const side of [0,1])for(let c=0;c<cols;c++)for(let f=0;f<fl;f++){
+  const u=(c+.5)/cols,v=(f+.55)/fl;let x,y;
+  if(side===0){x=sx-a+a*u;y=sy+b*u-v*h;}else{x=sx+a*u;y=sy+b-b*u-v*h;}
+  ctx.fillStyle=side?'rgba(30,40,55,.55)':'rgba(30,40,55,.45)';ctx.fillRect(x-ww/2,y-wh/2,ww,wh);
+  const hsh=Math.sin((seed*999+c*13.1+f*7.7+side*3.3))*43758.5;const r=hsh-Math.floor(hsh);
+  WIN.push(x-ww/2,y-wh/2,ww,wh,r,warm);
+ }
+}
+function tree(sx,sy,s,col,kind){
+ ctx.fillStyle='#5b3e25';ctx.fillRect(sx-s*.08,sy-s*.35,s*.16,s*.4);
+ if(kind){poly([sx,sy-s*1.35,sx+s*.42,sy-s*.25,sx-s*.42,sy-s*.25],col);poly([sx,sy-s*1.35,sx+s*.42,sy-s*.25,sx,sy-s*.25],shade(col,.8));}
+ else{ctx.fillStyle=col;ctx.beginPath();ctx.arc(sx,sy-s*.7,s*.42,0,7);ctx.fill();ctx.fillStyle=shade(col,1.15);ctx.beginPath();ctx.arc(sx-s*.12,sy-s*.82,s*.2,0,7);ctx.fill();}
+}
+function drawBuilding(b){
+ const e=elevAt(b.x,b.y);const [sx,sy]=iso(b.x,b.y,e);
+ const grow=clamp((now-b.born)/900,0,1),gs=1-Math.pow(1-grow,3);
+ const era=S.era,U=TH;const pal=ERA[era];
+ const wall=pal.wall[b.pal%pal.wall.length],roof=pal.roof[b.pal%pal.roof.length];
+ const warm=era<1900?1:0;
+ ctx.fillStyle='rgba(0,0,0,.18)';ctx.beginPath();ctx.ellipse(sx+TW*.08,sy+TH*.08,TW*.42,TH*.42,0,0,7);ctx.fill();
+ const L=b.level;
+ if(b.type==='house'||b.type==='shop'||b.type==='inn'){
+  const spec=[[.55,.75,0],[.68,1.4,1],[.8,2.1,1],[.86,3.4,2],[.82,5.6,3],[.7,9,3]][L-1];
+  let w=spec[0];const h=spec[1]*U*gs;const a=TW/2*w,bb=TH/2*w;
+  let wl=wall;if(L===6)wl=b.pal%2?'#8fb1c9':'#a9c2d3';if(L===5&&era===2000)wl=b.pal%2?'#d9d4cc':'#b7c3cc';
+  if(b.type==='shop'&&L<=3)wl='#e9d9b6';
+  boxAt(sx,sy,a,bb,h,shade(wl,1.05),shade(wl,.92),shade(wl,.74));
+  if(L<=2&&era<=1800&&b.pal%2===0){ // half-timbered lines
+   ctx.strokeStyle='rgba(70,45,25,.75)';ctx.lineWidth=Math.max(.6,TW*.03);ctx.beginPath();ctx.moveTo(sx-a,sy-h*.5);ctx.lineTo(sx,sy+bb-h*.5);ctx.lineTo(sx+a,sy-h*.5);ctx.moveTo(sx-a*.5,sy+bb*.5);ctx.lineTo(sx-a*.5,sy+bb*.5-h);ctx.moveTo(sx+a*.5,sy+bb*.5);ctx.lineTo(sx+a*.5,sy+bb*.5-h);ctx.stroke();}
+  const fl=Math.max(1,Math.round(spec[1]/.75)),cols=L>=4?3:L>=2?2:1;
+  windows(sx,sy,a,bb,h,Math.min(fl,12),cols,b.seed,warm,0);
+  if(spec[2]<2){const rh=(L===1?.7:.95)*U*gs;const rc=b.type==='shop'&&era>=1800?'#6a4a3c':roof;
+   poly([sx-a,sy-h,sx,sy+bb-h,sx,sy-h-rh],shade(rc,1));poly([sx,sy+bb-h,sx+a,sy-h,sx,sy-h-rh],shade(rc,.75));
+   if(L===1&&era===1700&&b.pal===3){poly([sx-a,sy-h,sx,sy+bb-h,sx,sy-h-rh],'#c9a85a');poly([sx,sy+bb-h,sx+a,sy-h,sx,sy-h-rh],'#a88a44');}}
+  else{ctx.fillStyle=shade(wl,.6);ctx.fillRect(sx-a*.25,sy-h-U*.35,a*.3,U*.35);if(L===6){ctx.fillStyle='#ddd';ctx.fillRect(sx-.5,sy-h-U*1.4,1,U*1.4);}}
+  if(b.type==='shop'){ctx.fillStyle=['#b03a2e','#2e6b8a','#3a7d44','#c98b3a'][b.pal];poly([sx-a,sy-U*.55,sx,sy+bb-U*.55,sx,sy+bb-U*.35,sx-a,sy-U*.35],ctx.fillStyle);}
+  if(b.type==='inn'){ctx.fillStyle='#d8b04a';ctx.fillRect(sx-a-2,sy-h*.6,3,3);}
+  return;}
+ if(b.type==='church'){
+  const a=TW/2*.75,bb=TH/2*.75,h=1.6*U*gs;const st=era>=1800?'#c8bfae':'#d8cdb4';
+  boxAt(sx,sy,a,bb,h,st,shade(st,.9),shade(st,.72));
+  poly([sx-a,sy-h,sx,sy+bb-h,sx,sy-h-U],'#6b5a4a');poly([sx,sy+bb-h,sx+a,sy-h,sx,sy-h-U],'#55473a');
+  const tx=sx-a*.45,ty=sy-bb*.1;const th=3.6*U*gs,ta=TW*.13,tb=TH*.13;
+  boxAt(tx,ty,ta,tb,th,st,shade(st,.92),shade(st,.75));
+  poly([tx-ta,ty-th,tx,ty+tb-th,tx,ty-th-U*1.8],'#5d6e62');poly([tx,ty+tb-th,tx+ta,ty-th,tx,ty-th-U*1.8],'#47564b');
+  WIN.push(tx-1,ty-th*.6,2,3,.1,1);WIN.push(sx-a*.2,sy-h*.5,2,3,.2,1);
+  return;}
+ if(b.type==='windmill'){
+  const a=TW*.18,bb=TH*.18,h=1.8*U*gs;boxAt(sx,sy,a,bb,h,'#e6dcc6','#d8ccb2','#b8aa8e');
+  poly([sx-a,sy-h,sx,sy+bb-h,sx,sy-h-U*.8],'#6d4b33');poly([sx,sy+bb-h,sx+a,sy-h,sx,sy-h-U*.8],'#563a27');
+  const hx=sx-a*.3,hy=sy-h-U*.1,r=TW*.55*gs,an=now/1600;ctx.strokeStyle='#4a3626';ctx.lineWidth=Math.max(1,TW*.05);
+  for(let k=0;k<4;k++){const t=an+k*Math.PI/2;const ex=hx+Math.cos(t)*r*.8,ey=hy+Math.sin(t)*r;ctx.beginPath();ctx.moveTo(hx,hy);ctx.lineTo(ex,ey);ctx.stroke();ctx.fillStyle='rgba(235,225,200,.8)';ctx.beginPath();ctx.moveTo(hx+Math.cos(t)*r*.25,hy+Math.sin(t)*r*.3);ctx.lineTo(ex,ey);ctx.lineTo(ex+Math.cos(t+1.57)*r*.15,ey+Math.sin(t+1.57)*r*.18);ctx.closePath();ctx.fill();}
+  return;}
+ if(b.type==='watermill'){
+  const a=TW*.32,bb=TH*.32,h=1.1*U*gs;boxAt(sx,sy,a,bb,h,'#d8cbb0','#cbbd9f','#a99a7e');
+  poly([sx-a,sy-h,sx,sy+bb-h,sx,sy-h-U*.8],'#7a4a30');poly([sx,sy+bb-h,sx+a,sy-h,sx,sy-h-U*.8],'#603a25');
+  const wx=sx+a*.9,wy=sy-U*.2,r=TW*.25;ctx.strokeStyle='#5a3e28';ctx.lineWidth=Math.max(1,TW*.05);ctx.beginPath();ctx.ellipse(wx,wy,r*.45,r,0,0,7);ctx.stroke();
+  const an=now/900;for(let k=0;k<6;k++){const t=an+k*1.047;ctx.beginPath();ctx.moveTo(wx,wy);ctx.lineTo(wx+Math.cos(t)*r*.45,wy+Math.sin(t)*r);ctx.stroke();}
+  WIN.push(sx-a*.5,sy-h*.5,2,2.5,.2,1);return;}
+ if(b.type==='factory'){
+  const a=TW/2*.9,bb=TH/2*.9,h=1.5*U*gs;const br=era===2000?'#b9bec4':'#9a5a44';
+  boxAt(sx,sy,a,bb,h,shade(br,1.05),shade(br,.9),shade(br,.72));
+  for(let k=0;k<3;k++){const u=(k+.2)/3;const px=sx-a+a*u,py=sy-h+bb*u;poly([px,py,px+a/3,py+bb/3,px+a/6,py+bb/6-U*.5],shade(br,.8));}
+  if(era<2000){ctx.fillStyle='#6a3a2a';const cx2=sx+a*.35,cy2=sy-h*.6;ctx.fillRect(cx2-TW*.05,cy2-2.4*U*gs,TW*.1,2.4*U*gs);}
+  windows(sx,sy,a,bb,h,2,3,b.seed,warm,0);return;}
+ if(b.type==='station'){
+  const a=TW/2*.92,bb=TH/2*.92,h=1.2*U*gs;const st=era===2000?'#d9dde2':'#c9b49a';
+  boxAt(sx,sy,a,bb,h,st,shade(st,.9),shade(st,.72));
+  poly([sx-a,sy-h,sx,sy+bb-h,sx,sy-h-U*.6],era===2000?'#7a8a98':'#5e4a3c');poly([sx,sy+bb-h,sx+a,sy-h,sx,sy-h-U*.6],era===2000?'#5e6c78':'#4a3a2f');
+  ctx.fillStyle='#f3f0e8';ctx.beginPath();ctx.arc(sx,sy-h-U*.2,TW*.06,0,7);ctx.fill();
+  windows(sx,sy,a,bb,h,1,3,b.seed,warm,0);return;}
+ if(b.type==='plant'){
+  const a=TW/2*.85,bb=TH/2*.85,h=1.2*U*gs;const st=era===2000?'#c7ccd2':'#8a6a5a';
+  boxAt(sx,sy,a,bb,h,st,shade(st,.9),shade(st,.72));
+  if(era===1900){ctx.fillStyle='#5a4036';for(const o of [-.3,.2]){ctx.fillRect(sx+a*o-TW*.04,sy-h-3*U*gs,TW*.08,3*U*gs);}}
+  else{const tx=sx+a*.3,ty=sy-h*.3,ct=2.6*U*gs;ctx.fillStyle='#d6d9dc';ctx.beginPath();ctx.moveTo(tx-TW*.22,ty);ctx.quadraticCurveTo(tx-TW*.1,ty-ct*.6,tx-TW*.14,ty-ct);ctx.lineTo(tx+TW*.14,ty-ct);ctx.quadraticCurveTo(tx+TW*.1,ty-ct*.6,tx+TW*.22,ty);ctx.fill();
+   ctx.fillStyle='rgba(240,240,245,.5)';ctx.beginPath();ctx.arc(tx+Math.sin(now/2000)*2,ty-ct-U*.6,TW*.16,0,7);ctx.fill();}
+  ctx.fillStyle='#f0c040';ctx.fillRect(sx-2,sy-h*.6,3,3);return;}
+ if(b.type==='turbine'){
+  const hh=4.5*U*gs;ctx.strokeStyle='#f0f2f4';ctx.lineWidth=Math.max(1,TW*.06);ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx,sy-hh);ctx.stroke();
+  const an=now/700+b.seed*6,r=TW*.75*gs;ctx.lineWidth=Math.max(1,TW*.045);for(let k=0;k<3;k++){const t=an+k*2.094;ctx.beginPath();ctx.moveTo(sx,sy-hh);ctx.lineTo(sx+Math.cos(t)*r*.55,sy-hh+Math.sin(t)*r);ctx.stroke();}
+  WIN.push(sx-1,sy-hh-1,2,2,-1,2);return;}
+}
+// ---------- vehicles ----------
+function agentPos(a){const f=a.t;const x=a.px+(a.x-a.px)*f,y=a.py+(a.y-a.py)*f;const dx=a.x-a.px,dy=a.y-a.py;return [x+(-dy)*a.off*.0+(dy!==0?a.off*.4:0),y+(dx!==0?a.off*.4:0),dx,dy];}
+const HL=[];
+function drawAgent(a,p){
+ const [x,y,dx,dy]=p;const e=elevAt(x,y);const [sx,sy]=iso(x,y,Math.max(1,e));
+ if(a.k==='ped'){ctx.fillStyle=['#7a2e2e','#2e4a7a','#3a5a2e','#6a5a3a','#4a3a5a'][(a.off*10+5|0)%5];ctx.fillRect(sx-.8,sy-TH*.35,1.6,TH*.35);ctx.fillStyle='#e8c8a8';ctx.fillRect(sx-.8,sy-TH*.48,1.6,1.4);return;}
+ const along=dx!==0?[TW/2*Math.sign(dx),TH/2*Math.sign(dx)]:[-TW/2*Math.sign(dy||1),TH/2*Math.sign(dy||1)];
+ let len=.28,wid=.12,h=TH*.32,col=a.col;
+ if(a.k==='cart'){col='#8a6440';len=.24;h=TH*.3;}
+ if(a.k==='coach'){col='#3a2a22';len=.28;h=TH*.45;}
+ if(a.k==='tram'){col='#c9a040';len=.55;h=TH*.55;}
+ if(a.k==='oldcar'){col=['#1e1e1e','#3a2a2a','#2a3a4a'][(a.off*10+5|0)%3];h=TH*.36;}
+ if(a.k==='bus'){col='#d0b020';len=.5;h=TH*.6;}
+ if(a.k==='truck'){col='#e6e6e6';len=.42;h=TH*.5;}
+ const px=-along[1]*.4,py=along[0]*.4;
+ const ax=along[0]*len,ay=along[1]*len,wx=(dx!==0?-TW/2:TW/2)*wid,wy=TH/2*wid*(dx!==0?1:1);
+ ctx.fillStyle='rgba(0,0,0,.25)';ctx.fillRect(sx-3,sy-1,6,2);
+ poly([sx-ax-wx,sy-ay-wy,sx+ax-wx,sy+ay-wy,sx+ax+wx,sy+ay+wy,sx-ax+wx,sy-ay+wy].map((v,i)=>i%2?v-h:v),shade(col,1.1));
+ poly([sx-ax+wx,sy-ay+wy-h,sx+ax+wx,sy+ay+wy-h,sx+ax+wx,sy+ay+wy,sx-ax+wx,sy-ay+wy],shade(col,.75));
+ if(a.k==='cart'||a.k==='coach'){ctx.fillStyle='#5a3a22';const hx=sx+ax*1.9,hy=sy+ay*1.9;ctx.fillRect(hx-1.5,hy-TH*.35,3,TH*.25);}
+ if(a.k==='tram'){ctx.strokeStyle='#333';ctx.lineWidth=.6;ctx.beginPath();ctx.moveTo(sx,sy-h);ctx.lineTo(sx,sy-h-TH*.4);ctx.stroke();}
+ HL.push(sx+ax*1.1,sy+ay*1.1-h*.4,a.k==='cart'||a.k==='coach'?1:0);
+}
+function drawTrain(tr){
+ const out=[];
+ for(let k=0;k<tr.len;k++){const s=tr.s-k*1.0*(tr.dir);const p=railAt(s);if(!p||s<0||s>railPath.length-1)continue;out.push([p,k]);}
+ return out;
+}
+function drawCar(p,k){
+ const [x,y]=p;const e=elevAt(x,y);const [sx,sy]=iso(x,y,Math.max(1,e));const vert=railVert;
+ const along=vert?[-TW/2,TH/2]:[TW/2,TH/2];const len=.42,wid=.17;const perp=vert?[TW/2,TH/2]:[-TW/2,TH/2];
+ const ax=along[0]*len,ay=along[1]*len,wx=perp[0]*wid,wy=perp[1]*wid;
+ let col,h=TH*.6;
+ if(S.era===1800)col=k===0?'#1e1e22':'#6a2a22';else if(S.era===1900)col=k===0?'#22262a':'#2f5a3a';else col=k===0?'#e8e8ec':'#d8dce2';
+ poly([sx-ax-wx,sy-ay-wy-h,sx+ax-wx,sy+ay-wy-h,sx+ax+wx,sy+ay+wy-h,sx-ax+wx,sy-ay+wy-h],shade(col,1.15));
+ poly([sx-ax+wx,sy-ay+wy-h,sx+ax+wx,sy+ay+wy-h,sx+ax+wx,sy+ay+wy,sx-ax+wx,sy-ay+wy],shade(col,.8));
+ poly([sx-ax-wx,sy-ay-wy-h,sx-ax+wx,sy-ay+wy-h,sx-ax+wx,sy-ay+wy,sx-ax-wx,sy-ay-wy],shade(col,.65));
+ if(S.era===2000){ctx.fillStyle='#c0392b';poly([sx-ax+wx,sy-ay+wy-h*.35,sx+ax+wx,sy+ay+wy-h*.35,sx+ax+wx,sy+ay+wy-h*.2,sx-ax+wx,sy-ay+wy-h*.2],'#c0392b');}
+ if(k===0&&S.era<2000){ctx.fillStyle='#111';ctx.fillRect(sx-1,sy-h-TH*.4,2.4,TH*.4);}
+ if(k>0||S.era===2000)for(let w=0;w<3;w++){const u=(w+.5)/3;WIN.push(sx-ax+wx+2*ax*u-1,sy-ay+wy+2*ay*u-h*.7,2,1.6,.05,S.era<1900?1:0);}
+}
+// ---------- trees list ----------
+function drawForestTile(x,y,i){const e=E[i];const g=GV[i];const kinds=e===2||g>.55;
+ for(let k=0;k<2;k++){const ox2=(Math.sin(i*7.1+k*3)*.28),oy2=(Math.cos(i*3.7+k*5)*.28);const [sx,sy]=iso(x+ox2,y+oy2,e);tree(sx,sy,TW*.5*(.8+((i*k+3)%5)*.06),kinds?(k?'#2f5a34':'#3a6a3a'):(k?'#4c7a36':'#5a8a3a'),kinds);}}
+// ---------- main render ----------
+let now=0,last=0,acc=0,dayT=.3;
+function nightF(){const c=Math.cos(dayT*Math.PI*2);return clamp((c+.15)/.9,0,1);} // dayT 0=midnight .5=noon
+function render(){
+ if(cacheDirty)drawCache();
+ ctx.setTransform(DPR,0,0,DPR,0,0);
+ const nf=nightF();
+ const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#2a5a7c');g.addColorStop(1,'#1b3c55');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ ctx.drawImage(cache,0,0,W,H);
+ // water sparkle
+ for(let k=0;k<14;k++){const x=ri(N),y=ri(N);const i=idx(x,y);if(T[i]||R[i])continue;const [sx,sy]=iso(x,y,0);ctx.fillStyle='rgba(220,240,255,.35)';ctx.fillRect(sx-TW*.15+rnd()*TW*.3,sy,TW*.12,.8);}
+ WIN=[];HL.length=0;
+ // build draw list
+ const items=[];
+ for(let i=0;i<N*N;i++){const x=i%N,y=(i/N)|0;if(F[i]&&B[i]<0&&!R[i]&&!RL[i]&&T[i])items.push([x+y,0,i]);else if(B[i]>=0)items.push([x+y+.01,1,B[i]]);}
+ for(const a of cars){const p=agentPos(a);items.push([p[0]+p[1]+.2,2,a,p]);}
+ for(const a of peds){const p=agentPos(a);items.push([p[0]+p[1]+.2,2,a,p]);}
+ for(const tr of trains)for(const [p,k] of drawTrain(tr))items.push([p[0]+p[1]+.3,3,p,k]);
+ if(S.era>=1800){for(let i=0;i<N*N;i++){if(R[i]===1&&(i*7)%5===0){if(S.era>=1900&&!P[i])continue;const x=i%N,y=(i/N)|0;items.push([x+y+.4,4,x,y]);}}}
+ items.sort((a,b)=>a[0]-b[0]);
+ const LAMPS=[];
+ for(const it of items){
+  if(it[1]===0){const i=it[2];drawForestTile(i%N,(i/N)|0,i);}
+  else if(it[1]===1){const b=buildings[it[2]];if(b&&!b.dead)drawBuilding(b);}
+  else if(it[1]===2)drawAgent(it[2],it[3]);
+  else if(it[1]===3)drawCar(it[2],it[3]);
+  else if(it[1]===4){const [sx,sy]=iso(it[2]+.35,it[3]-.35,elevAt(it[2],it[3]));const hh=S.era===1800?TH*1.1:TH*1.6;ctx.fillStyle=S.era===1800?'#2a2a2a':'#6a5440';ctx.fillRect(sx-.5,sy-hh,1.1,hh);if(S.era>=1900){ctx.fillRect(sx-2,sy-hh,4,.8);}LAMPS.push(sx,sy-hh);}
+ }
+ // power lines
+ if(S.era>=1900&&plantTile){ctx.strokeStyle='rgba(30,30,30,.45)';ctx.lineWidth=.6;ctx.beginPath();
+  for(let i=0;i<N*N;i++){if(!(R[i]===1&&P[i]&&(i*7)%5===0))continue;const x=i%N,y=(i/N)|0;const [ax,ay]=iso(x+.35,y-.35,elevAt(x,y));const hh=TH*1.6;
+   for(let j=0;j<N*N;j++){}
+   for(const [dx,dy] of [[1,0],[0,1],[2,0],[0,2],[1,1],[3,0],[0,3]]){const X=x+dx,Y=y+dy;if(!inb(X,Y))continue;const k=idx(X,Y);if(R[k]===1&&P[k]&&(k*7)%5===0){const [bx,by]=iso(X+.35,Y-.35,elevAt(X,Y));ctx.moveTo(ax,ay-hh);ctx.quadraticCurveTo((ax+bx)/2,(ay+by)/2-hh+2,bx,by-hh);break;}}}
+  ctx.stroke();}
+ // smoke
+ for(const s of smoke){const [sx,sy]=iso(s.x,s.y,elevAt(s.x,s.y)+s.z*2.2);ctx.fillStyle='rgba('+(S.era===1800?'90,90,95':'130,130,135')+','+(s.a*.45)+')';ctx.beginPath();ctx.arc(sx,sy,s.r*TW,0,7);ctx.fill();}
+ // night overlay
+ const dusk=Math.max(0,1-Math.abs(nf-.45)*3);
+ if(dusk>0){ctx.fillStyle='rgba(255,120,60,'+(dusk*.12)+')';ctx.fillRect(0,0,W,H);}
+ if(nf>0){ctx.fillStyle='rgba(8,14,42,'+(nf*.62)+')';ctx.fillRect(0,0,W,H);
+  // windows
+  const thr=S.era===1700?.35:S.era===1800?.5:.62;
+  for(let k=0;k<WIN.length;k+=6){const r=WIN[k+4];if(r>thr+(1-nf)*.4&&r!==-1)continue;const warm=WIN[k+5];
+   ctx.fillStyle=r===-1?'rgba(255,40,40,'+nf+')':warm===1?'rgba(255,170,70,'+nf*.95+')':'rgba(255,225,140,'+nf+')';ctx.fillRect(WIN[k],WIN[k+1],WIN[k+2],WIN[k+3]);}
+  // lamps
+  if(S.era>=1800){for(let k=0;k<LAMPS.length;k+=2){const gx=LAMPS[k],gy=LAMPS[k+1];const rr=TW*(S.era===1800?.55:.8);const gr=ctx.createRadialGradient(gx,gy,0,gx,gy,rr);gr.addColorStop(0,S.era===1800?'rgba(255,170,80,'+(nf*.7)+')':'rgba(255,235,180,'+(nf*.7)+')');gr.addColorStop(1,'rgba(255,200,120,0)');ctx.fillStyle=gr;ctx.fillRect(gx-rr,gy-rr,rr*2,rr*2);}}
+  for(let k=0;k<HL.length;k+=3){ctx.fillStyle=HL[k+2]?'rgba(255,160,60,'+nf*.8+')':'rgba(255,250,210,'+nf+')';ctx.fillRect(HL[k]-1,HL[k+1]-1,2,2);}
+ }
+ // vignette
+}
+// ---------- HUD ----------
+const $=id=>document.getElementById(id);
+let hudT=0;
+function fmt(n){return n.toLocaleString('ja-JP');}
+function updateHud(force){
+ const e=ERA[S.era];const pop=population();const nb=buildings.filter(b=>!b.dead).length;
+ const year=town.base+Math.min(40,Math.round(step/town.maxSteps*40));
+ $('tname').textContent=town.name;$('tsub').textContent=town.region+'・'+e.name;
+ $('pop').innerHTML=fmt(pop)+'<small>人</small>';
+ let rd=0,rl=0;for(let i=0;i<N*N;i++){if(R[i])rd++;if(RL[i])rl++;}
+ const pw=e.power?(nb?Math.round(buildings.filter(b=>!b.dead&&powered(b)).length/nb*100):0)+'%':'—';
+ const rows=[['西暦',year+'年'],['建物',fmt(nb)+'棟'],['道路',(rd*.15).toFixed(1)+' km'],['鉄道',e.rail?(rl*.15).toFixed(1)+' km':'—'],['電化率',pw],['雇用',fmt(jobs())+'人']];
+ $('stats').innerHTML=rows.map(r=>'<span>'+r[0]+'</span><span>'+r[1]+'</span>').join('');
+ const sc=$('spark'),c=sc.getContext('2d');c.clearRect(0,0,sc.width,sc.height);
+ if(history.length>1){const mx=Math.max(...history,10);c.beginPath();history.forEach((v,i)=>{const x=i/(history.length-1)*(sc.width-4)+2,y=sc.height-4-v/mx*(sc.height-10);i?c.lineTo(x,y):c.moveTo(x,y);});
+  c.strokeStyle='#ffd27a';c.lineWidth=3;c.stroke();c.lineTo(sc.width-2,sc.height);c.lineTo(2,sc.height);c.fillStyle='rgba(255,210,122,.15)';c.fill();}
+ c.fillStyle='rgba(243,234,214,.6)';c.font='18px sans-serif';c.fillText('人口推移',6,20);
+}
+function syncUI(){document.querySelectorAll('[data-era]').forEach(b=>b.classList.toggle('on',+b.dataset.era===S.era));$('spd').textContent='速度 '+S.speed+'×';$('snd').textContent='音 '+(S.sound?'オン':'オフ');$('snd').classList.toggle('on',S.sound);}
+document.querySelectorAll('[data-era]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();S.era=+b.dataset.era;save();syncUI();startFade();}));
+$('spd').addEventListener('click',e=>{e.stopPropagation();S.speed=S.speed>=8?1:S.speed*2;save();syncUI();});
+$('snd').addEventListener('click',e=>{e.stopPropagation();S.sound=!S.sound;save();syncUI();audio();});
+$('nxt').addEventListener('click',e=>{e.stopPropagation();startFade();});
+let uiTimer=0;function showUI(){$('ui').classList.remove('hide');uiTimer=5;}
+addEventListener('pointerdown',showUI);addEventListener('mousemove',showUI);
+addEventListener('resize',()=>{layout();});
+function startFade(){if(!ending||ending===1)ending=1;}
+// ---------- audio ----------
+let AC=null,master=null;
+function audio(){
+ if(S.sound&&!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();master=AC.createGain();master.gain.value=0;master.connect(AC.destination);
+  const len=AC.sampleRate*2,buf=AC.createBuffer(1,len,AC.sampleRate),d=buf.getChannelData(0);let l=0;for(let i=0;i<len;i++){l=(l+.02*(Math.random()*2-1))/1.02;d[i]=l*3.5;}
+  const src=AC.createBufferSource();src.buffer=buf;src.loop=true;const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=500;const g=AC.createGain();g.gain.value=.35;src.connect(f);f.connect(g);g.connect(master);src.start();}catch(e){AC=null;}}
+ if(AC){if(S.sound)AC.resume();master.gain.setTargetAtTime(S.sound?.5:0,AC.currentTime,.4);}
+}
+function blip(freq,dur,type,vol,slide){if(!AC||!S.sound)return;const t=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type=type;o.frequency.setValueAtTime(freq,t);if(slide)o.frequency.exponentialRampToValueAtTime(freq*slide,t+dur);g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vol,t+.02);g.gain.exponentialRampToValueAtTime(.0001,t+dur);o.connect(g);g.connect(master);o.start(t);o.stop(t+dur+.05);}
+function ambientTick(dt){if(!AC||!S.sound)return;const nf=nightF();
+ if(nf<.4&&rnd()<dt*.5){const f=2200+rnd()*1800;blip(f,.12,'sine',.03,1.3);setTimeout(()=>blip(f*1.1,.1,'sine',.025,1.2),130);}
+ if(nf>.6&&rnd()<dt*.25)blip(4200,.05,'sine',.012,1);
+ if(rnd()<dt*.012){[0,1,2].forEach(k=>setTimeout(()=>blip(392,2.2,'sine',.04,1),k*900));}
+}
+// ---------- loop ----------
+const STEP_MS=320;
+function frame(t){
+ const dt=Math.min(.1,(t-(last||t))/1000);last=t;now=t;
+ dayT=(dayT+dt*S.speed/90)%1;
+ if(!ending){acc+=dt*1000*S.speed;let n=0;while(acc>=STEP_MS&&n<12){acc-=STEP_MS;simStep();n++;}if(acc>STEP_MS*12)acc=0;}
+ updAgents(dt);ambientTick(dt);
+ const fd=$('fade');
+ if(ending){ending+=dt;const a=clamp((ending-1)/1.4,0,1);fd.style.opacity=a;if(a>=1){newTown();ending=0;}}
+ else if(titleT>0){titleT-=dt;fd.style.opacity=clamp(titleT/1.6,0,1)*(titleT>3?1:1);if(titleT>3)fd.style.opacity=1;}
+ else fd.style.opacity=0;
+ // fade title background less opaque after reveal
+ fd.style.background=(ending||titleT>3)?'#000':'rgba(0,0,0,0)';
+ render();
+ hudT-=dt;if(hudT<=0){hudT=.4;updateHud();}
+ if(uiTimer>0){uiTimer-=dt;if(uiTimer<=0)$('ui').classList.add('hide');}
+ requestAnimationFrame(frame);
+}
+syncUI();newTown();showUI();
+if(location.hash.indexOf('test')>=0){const m=location.hash.match(/steps=(\d+)/);const ns=m?+m[1]:700;const er=location.hash.match(/era=(\d+)/);if(er){S.era=+er[1];newTown();}const nt=location.hash.match(/night=([\d.]+)/);dayT=nt?+nt[1]:.5;now=performance.now();for(let k=0;k<ns;k++){simStep();updAgents(.05);}for(const b of buildings)b.born=-1e5;titleT=-1;syncUI();$('fade').style.display='none';}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

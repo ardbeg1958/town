@@ -29,6 +29,10 @@ canvas#c{position:fixed;left:0;top:0;width:100%;height:100%;display:block}
 #ui.hide{opacity:0;pointer-events:none}
 #ui button{font:inherit;font-size:13px;color:#f3ead6;background:rgba(30,24,16,.78);border:1px solid rgba(230,200,140,.4);border-radius:18px;padding:7px 12px}
 #ui button.on{background:#c98b3a;color:#1b1209;border-color:#f0c070;font-weight:700}
+#zoom{position:fixed;right:calc(env(safe-area-inset-right,0px) + 10px);top:calc(env(safe-area-inset-top,0px) + 10px);display:flex;flex-direction:column;gap:8px;z-index:5}
+#zoom button{width:48px;height:48px;border-radius:12px;font:inherit;font-size:26px;line-height:1;color:#f3ead6;background:rgba(30,24,16,.75);border:1px solid rgba(230,200,140,.45);box-shadow:0 2px 8px rgba(0,0,0,.35);padding:0}
+#zoom #zrs{font-size:20px;height:40px}
+#zoom button:active{background:#c98b3a;color:#1b1209}
 #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:6;display:flex;align-items:center;justify-content:center;flex-direction:column;transition:none}
 #fade div{font-family:Georgia,serif;font-size:28px;color:#ffe7b0}#fade p{margin:6px 0 0;font-size:14px;opacity:.8}
 @media (max-width:520px){#hud{min-width:0;padding:8px 10px;font-size:11px}#tname{font-size:16px}#pop{font-size:24px}#spark{width:160px;height:28px}#ui button{font-size:12px;padding:6px 10px}}
@@ -46,6 +50,7 @@ canvas#c{position:fixed;left:0;top:0;width:100%;height:100%;display:block}
  <button data-era="1700">1700年代</button><button data-era="1800">1800年代</button><button data-era="1900">1900年代</button><button data-era="2000">2000年代</button>
  <button id="spd">速度 1×</button><button id="snd">音 オフ</button><button id="nxt">次の町へ</button>
 </div>
+<div id="zoom"><button id="zin" aria-label="拡大">＋</button><button id="zout" aria-label="縮小">−</button><button id="zrs" aria-label="元に戻す">⟲</button></div>
 <div id="fade"><div id="fname"></div><p id="fsub"></p></div>
 <script>
 "use strict";
@@ -245,18 +250,29 @@ function updAgents(dt){
 }
 function railAt(s){if(!railPath)return null;const i=clamp(s,0,railPath.length-1.001);const a=Math.floor(i),f=i-a;const p=railPath[a],q=railPath[Math.min(a+1,railPath.length-1)];return [p[0]+(q[0]-p[0])*f,p[1]+(q[1]-p[1])*f];}
 // ---------- layout / projection ----------
+let TWfit=10,TWdef=10,TWt=10,camX=22,camY=22,VOFF=0;
 function layout(){
  DPR=Math.min(2,window.devicePixelRatio||1);W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;
  const portrait=H>W*1.15;
- if(portrait)TW=Math.max(16,W*2.3/N);else TW=Math.min(W*1.0/N,H*1.75/N);
- TH=TW/2;ZH=TW*.28;
- const mcx=portrait?town.cx+.5:N/2*0.4+(town.cx+.5)*0.6,mcy=portrait?town.cy+.5:N/2*0.4+(town.cy+.5)*0.6;
- const sx=(mcx-mcy)*TW/2,sy=(mcx+mcy)*TH/2;
- ox=W/2-sx;oy=(portrait?H*.56:H*.52)-sy;
- // clamp map in view
- const mapW=N*TW,top=oy,bot=oy+N*TH;
- cache=document.createElement('canvas');cache.width=W*DPR;cache.height=H*DPR;cacheDirty=true;
+ TWfit=Math.min(W*.96/N,(H*.86)*2/N/1.08);
+ TWdef=portrait?Math.max(16,W*2.3/N):Math.min(W*1.0/N,H*1.75/N);
+ TWdef=Math.max(TWdef,TWfit);
+ const z=S.zoom||TWdef/TWfit;TWt=clamp(TWfit*z,TWfit,TWfit*4);TW=TWt;
+ camX=portrait?town.cx+.5:N/2*0.4+(town.cx+.5)*0.6;camY=portrait?town.cy+.5:N/2*0.4+(town.cy+.5)*0.6;
+ VOFF=portrait?H*.06:H*.02;
+ cache=document.createElement('canvas');cache.width=W*DPR;cache.height=H*DPR;applyView();
 }
+function applyView(){
+ TH=TW/2;ZH=TW*.28;
+ // when nearly fully zoomed out, drift camera to map center
+ const f=clamp((TW-TWfit)/(TWfit*.6),0,1);
+ const cx=N/2+(camX-N/2)*f,cy=N/2+(camY-N/2)*f;
+ if(f<1){camX=cx;camY=cy;}
+ ox=W/2-(camX-camY)*TW/2;oy=H/2+VOFF*f-(camX+camY)*TH/2;cacheDirty=true;
+}
+function zoomBy(k){TWt=clamp(TWt*k,TWfit,TWfit*4);S.zoom=TWt/TWfit;save();showUI();}
+function zoomReset(){TWt=TWdef;S.zoom=0;save();const p=H>W*1.15;camX=p?town.cx+.5:N/2*0.4+(town.cx+.5)*0.6;camY=p?town.cy+.5:N/2*0.4+(town.cy+.5)*0.6;applyView();}
+function panBy(dx,dy){camX+=-dx/TW-dy/TH;camY+=dx/TW-dy/TH;camX=clamp(camX,0,N);camY=clamp(camY,0,N);applyView();}
 function iso(x,y,e){return [ox+(x-y)*TW/2,oy+(x+y)*TH/2-e*ZH];}
 function elevAt(x,y){const i=idx(clamp(Math.round(x),0,N-1),clamp(Math.round(y),0,N-1));return T[i]?E[i]:(R[i]?1:0.3);}
 // ---------- colors ----------
@@ -519,8 +535,13 @@ $('spd').addEventListener('click',e=>{e.stopPropagation();S.speed=S.speed>=8?1:S
 $('snd').addEventListener('click',e=>{e.stopPropagation();S.sound=!S.sound;save();syncUI();audio();});
 $('nxt').addEventListener('click',e=>{e.stopPropagation();startFade();});
 let uiTimer=0;function showUI(){$('ui').classList.remove('hide');uiTimer=5;}
-addEventListener('pointerdown',showUI);addEventListener('mousemove',showUI);
-addEventListener('resize',()=>{layout();});
+addEventListener('pointerdown',showUI);
+let drag=null;cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,id:e.pointerId};try{cv.setPointerCapture(e.pointerId)}catch(_){}});
+cv.addEventListener('pointermove',e=>{if(!drag||e.pointerId!==drag.id)return;panBy(e.clientX-drag.x,e.clientY-drag.y);drag.x=e.clientX;drag.y=e.clientY;});
+const endDrag=()=>{drag=null};cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
+$('zin').addEventListener('click',e=>{e.stopPropagation();zoomBy(1.4);});$('zout').addEventListener('click',e=>{e.stopPropagation();zoomBy(1/1.4);});$('zrs').addEventListener('click',e=>{e.stopPropagation();zoomReset();});
+addEventListener('mousemove',showUI);
+addEventListener('resize',()=>{const cx=camX,cy=camY;layout();if(town.founded){camX=cx;camY=cy;applyView();}});
 function startFade(){if(!ending||ending===1)ending=1;}
 // ---------- audio ----------
 let AC=null,master=null;
@@ -542,6 +563,7 @@ function frame(t){
  const dt=Math.min(.1,(t-(last||t))/1000);last=t;now=t;
  dayT=(dayT+dt*S.speed/90)%1;
  if(!ending){acc+=dt*1000*S.speed;let n=0;while(acc>=STEP_MS&&n<12){acc-=STEP_MS;simStep();n++;}if(acc>STEP_MS*12)acc=0;}
+ if(Math.abs(TW-TWt)>.01){TW+=(TWt-TW)*Math.min(1,dt*9);if(Math.abs(TW-TWt)<.02)TW=TWt;applyView();}
  updAgents(dt);ambientTick(dt);
  const fd=$('fade');
  if(ending){ending+=dt;const a=clamp((ending-1)/1.4,0,1);fd.style.opacity=a;if(a>=1){newTown();ending=0;}}
@@ -555,7 +577,7 @@ function frame(t){
  requestAnimationFrame(frame);
 }
 syncUI();newTown();showUI();
-if(location.hash.indexOf('test')>=0){const m=location.hash.match(/steps=(\d+)/);const ns=m?+m[1]:700;const er=location.hash.match(/era=(\d+)/);if(er){S.era=+er[1];newTown();}const nt=location.hash.match(/night=([\d.]+)/);dayT=nt?+nt[1]:.5;now=performance.now();for(let k=0;k<ns;k++){simStep();updAgents(.05);}for(const b of buildings)b.born=-1e5;titleT=-1;syncUI();$('fade').style.display='none';}
+if(location.hash.indexOf('test')>=0){const m=location.hash.match(/steps=(\d+)/);const ns=m?+m[1]:700;const er=location.hash.match(/era=(\d+)/);if(er){S.era=+er[1];newTown();}const nt=location.hash.match(/night=([\d.]+)/);dayT=nt?+nt[1]:.5;now=performance.now();for(let k=0;k<ns;k++){simStep();updAgents(.05);}for(const b of buildings)b.born=-1e5;titleT=-1;syncUI();const zm=location.hash.match(/zoom=([\d.]+)/);if(zm){S.zoom=+zm[1];TWt=TW=TWfit*(+zm[1]);applyView();}const pm=location.hash.match(/pan=(-?\d+),(-?\d+)/);if(pm)panBy(+pm[1],+pm[2]);$('fade').style.display='none';}
 requestAnimationFrame(frame);
 </script>
 </body>
